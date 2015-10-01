@@ -21,11 +21,14 @@
 #define MPI2_TYPE_H
 
 /*******************************************************************************
- * Define * if it hasn't already been defined. By default
- * * is defined to be a near pointer. MPI2_POINTER can be defined as
- * a far pointer by defining * as "far *" before this header file is
+ * Define MPI2_POINTER if it hasn't already been defined. By default
+ * MPI2_POINTER is defined to be a near pointer. MPI2_POINTER can be defined as
+ * a far pointer by defining MPI2_POINTER as "far *" before this header file is
  * included.
  */
+#ifndef MPI2_POINTER
+#define MPI2_POINTER     *
+#endif
 
 /* the basic types may have already been included by mpi_type.h */
 #ifndef MPI_TYPE_H

@@ -1151,6 +1151,7 @@ mpt3sas_config_get_sas_iounit_pg1(struct MPT3SAS_ADAPTER *ioc,
  out:
 	return r;
 }
+EXPORT_SYMBOL(mpt3sas_config_get_sas_iounit_pg1);
 
 /**
  * mpt3sas_config_set_sas_iounit_pg1 - send sas iounit page 1
@@ -1195,6 +1196,7 @@ mpt3sas_config_set_sas_iounit_pg1(struct MPT3SAS_ADAPTER *ioc,
  out:
 	return r;
 }
+EXPORT_SYMBOL(mpt3sas_config_set_sas_iounit_pg1);
 
 /**
  * mpt3sas_config_get_expander_pg0 - obtain expander page 0

@@ -6,3 +6,8 @@ mpt3sas-y +=  mpt3sas_base.o     \
 		mpt3sas_transport.o     \
 		mpt3sas_ctl.o	\
 		mpt3sas_trigger_diag.o
+
+ifdef CONFIG_SCSI_MPT3SAS_STM
+obj-m += mpt3sas_stm.o
+ccflags-y += -DCONFIG_SCSI_MPT3SAS_STM
+endif

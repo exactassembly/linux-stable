@@ -8161,6 +8161,10 @@ _scsih_init(void)
 
 	mpt3sas_ctl_init();
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    mpt3sas_base_stm_initialize_callback_handler();
+#endif
+    
 	error = pci_register_driver(&scsih_driver);
 	if (error) {
 		/* raid transport support */
@@ -8181,11 +8185,14 @@ _scsih_exit(void)
 {
 	pr_info("mpt3sas version %s unloading\n",
 	    MPT3SAS_DRIVER_VERSION);
-
+    
 	mpt3sas_ctl_exit();
 
 	pci_unregister_driver(&scsih_driver);
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    mpt3sas_base_stm_release_callback_handler();
+#endif
 
 	mpt3sas_base_release_callback_handler(scsi_io_cb_idx);
 	mpt3sas_base_release_callback_handler(tm_cb_idx);

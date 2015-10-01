@@ -65,6 +65,10 @@
 
 static MPT_CALLBACK	mpt_callbacks[MPT_MAX_CALLBACKS];
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+static struct STM_CALLBACK stm_callbacks;
+EXPORT_SYMBOL(mpt3sas_ioc_list);
+#endif
 
 #define FAULT_POLLING_INTERVAL 1000 /* in milliseconds */
 
@@ -205,6 +209,12 @@ _base_fault_reset_work(struct work_struct *work)
 		if (rc && (doorbell & MPI2_IOC_STATE_MASK) !=
 		    MPI2_IOC_STATE_OPERATIONAL)
 			return; /* don't rearm timer */
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    } else {
+        if (stm_callbacks.watchdog)
+            /* target mode drivers watchdog */
+            stm_callbacks.watchdog(ioc);
+#endif
 	}
 
 	spin_lock_irqsave(&ioc->ioc_reset_in_progress_lock, flags);
@@ -911,7 +921,7 @@ _base_interrupt(int irq, void *bus_id)
 	struct MPT3SAS_ADAPTER *ioc = reply_q->ioc;
 	Mpi2ReplyDescriptorsUnion_t *rpf;
 	u8 rc;
-
+    
 	if (ioc->mask_interrupts)
 		return IRQ_NONE;
 
@@ -937,7 +947,7 @@ _base_interrupt(int irq, void *bus_id)
 		if (request_desript_type ==
 		    MPI25_RPY_DESCRIPT_FLAGS_FAST_PATH_SCSI_IO_SUCCESS ||
 		    request_desript_type ==
-		    MPI2_RPY_DESCRIPT_FLAGS_SCSI_IO_SUCCESS) {
+		    MPI2_RPY_DESCRIPT_FLAGS_SCSI_IO_SUCCESS ) {
 			cb_idx = _base_get_cb_idx(ioc, smid);
 			if ((likely(cb_idx < MPT_MAX_CALLBACKS)) &&
 			    (likely(mpt_callbacks[cb_idx] != NULL))) {
@@ -946,6 +956,21 @@ _base_interrupt(int irq, void *bus_id)
 				if (rc)
 					mpt3sas_base_free_smid(ioc, smid);
 			}
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+        } else if (request_desript_type ==
+                   MPI2_RPY_DESCRIPT_FLAGS_TARGET_COMMAND_BUFFER) {
+            if (stm_callbacks.target_command)
+                stm_callbacks.target_command(ioc,
+                    &rpf->TargetCommandBuffer, msix_index);
+        } else if (request_desript_type ==
+                   MPI2_RPY_DESCRIPT_FLAGS_TARGETASSIST_SUCCESS) {
+            if (likely(stm_callbacks.target_assist)) {
+                rc = stm_callbacks.target_assist(ioc,
+                        &rpf->TargetAssistSuccess);
+                if (rc)
+                    mpt3sas_base_free_smid(ioc,smid);
+            }
+#endif
 		} else if (request_desript_type ==
 		    MPI2_RPY_DESCRIPT_FLAGS_ADDRESS_REPLY) {
 			reply = le32_to_cpu(
@@ -968,6 +993,10 @@ _base_interrupt(int irq, void *bus_id)
 				}
 			} else {
 				_base_async_event(ioc, msix_index, reply);
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+                if (stm_callbacks.event_handler)
+                    stm_callbacks.event_handler(ioc, msix_index, reply);
+#endif
 			}
 
 			/* reply free queue handling */
@@ -982,7 +1011,7 @@ _base_interrupt(int irq, void *bus_id)
 				writel(ioc->reply_free_host_index,
 				    &ioc->chip->ReplyFreeHostIndex);
 			}
-		}
+        }
 
 		rpf->Words = cpu_to_le64(ULLONG_MAX);
 		reply_q->reply_post_host_index =
@@ -1070,6 +1099,9 @@ mpt3sas_base_release_callback_handler(u8 cb_idx)
 {
 	mpt_callbacks[cb_idx] = NULL;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_release_callback_handler);
+#endif
 
 /**
  * mpt3sas_base_register_callback_handler - obtain index for the interrupt callback handler
@@ -1089,6 +1121,9 @@ mpt3sas_base_register_callback_handler(MPT_CALLBACK cb_func)
 	mpt_callbacks[cb_idx] = cb_func;
 	return cb_idx;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_register_callback_handler);
+#endif
 
 /**
  * mpt3sas_base_initialize_callback_handler - initialize the interrupt callback handler
@@ -1104,6 +1139,51 @@ mpt3sas_base_initialize_callback_handler(void)
 		mpt3sas_base_release_callback_handler(cb_idx);
 }
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+/**
+ * mpt3sas_base_stm_release_callback_handler - clear STM callback handler
+ *
+ * Return nothing.
+ */
+void
+mpt3sas_base_stm_release_callback_handler(void)
+{
+    stm_callbacks.watchdog = NULL;
+    stm_callbacks.target_command = NULL;
+    stm_callbacks.target_assist = NULL;
+    stm_callbacks.event_handler = NULL;
+    stm_callbacks.reset_handler = NULL;
+}
+EXPORT_SYMBOL(mpt3sas_base_stm_release_callback_handler);
+
+/**
+ * mpt3sas_base_stm_register_callback_handler - Set the STM callbacks
+ * @stm_funcs: Structure containing the function pointers
+ *
+ */
+void
+mpt3sas_base_stm_register_callback_handler(struct STM_CALLBACK stm_funcs)
+{
+    
+    stm_callbacks.watchdog = stm_funcs.watchdog;
+    stm_callbacks.target_command = stm_funcs.target_command;
+    stm_callbacks.target_assist = stm_funcs.target_assist;
+    stm_callbacks.event_handler = stm_funcs.event_handler;
+    stm_callbacks.reset_handler = stm_funcs.reset_handler;
+}
+EXPORT_SYMBOL(mpt3sas_base_stm_register_callback_handler);
+
+/**
+ * mpt3sas_base_stm_initialize_callback_handler - initialize the stm handler
+ *
+ * Return nothing.
+ */
+void
+mpt3sas_base_stm_initialize_callback_handler(void)
+{
+    mpt3sas_base_stm_release_callback_handler();
+}
+#endif
 
 /**
  * _base_build_zero_len_sge - build zero length sg entry
@@ -1916,6 +1996,9 @@ mpt3sas_base_get_msg_frame(struct MPT3SAS_ADAPTER *ioc, u16 smid)
 {
 	return (void *)(ioc->request + (smid * ioc->request_sz));
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_get_msg_frame);
+#endif
 
 /**
  * mpt3sas_base_get_sense_buffer - obtain a sense buffer virt addr
@@ -1958,6 +2041,9 @@ mpt3sas_base_get_reply_virt_addr(struct MPT3SAS_ADAPTER *ioc, u32 phys_addr)
 		return NULL;
 	return ioc->reply + (phys_addr - (u32)ioc->reply_dma);
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_get_reply_virt_addr);
+#endif
 
 /**
  * mpt3sas_base_get_smid - obtain a free smid from internal queue
@@ -1989,6 +2075,9 @@ mpt3sas_base_get_smid(struct MPT3SAS_ADAPTER *ioc, u8 cb_idx)
 	spin_unlock_irqrestore(&ioc->scsi_lookup_lock, flags);
 	return smid;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_get_smid);
+#endif
 
 /**
  * mpt3sas_base_get_smid_scsiio - obtain a free smid from scsiio queue
@@ -2023,6 +2112,9 @@ mpt3sas_base_get_smid_scsiio(struct MPT3SAS_ADAPTER *ioc, u8 cb_idx,
 	spin_unlock_irqrestore(&ioc->scsi_lookup_lock, flags);
 	return smid;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_get_smid_scsiio);
+#endif
 
 /**
  * mpt3sas_base_get_smid_hpr - obtain a free smid from hi-priority queue
@@ -2108,6 +2200,9 @@ mpt3sas_base_free_smid(struct MPT3SAS_ADAPTER *ioc, u16 smid)
 	}
 	spin_unlock_irqrestore(&ioc->scsi_lookup_lock, flags);
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_free_smid);
+#endif
 
 /**
  * _base_writeq - 64 bit write to MMIO
@@ -2127,7 +2222,8 @@ _base_writeq(__u64 b, volatile void __iomem *addr, spinlock_t *writeq_lock)
 	writeq(cpu_to_le64(b), addr);
 }
 #else
-static inline void
+//static inline void
+static void
 _base_writeq(__u64 b, volatile void __iomem *addr, spinlock_t *writeq_lock)
 {
 	unsigned long flags;
@@ -2239,6 +2335,36 @@ mpt3sas_base_put_smid_default(struct MPT3SAS_ADAPTER *ioc, u16 smid)
 	_base_writeq(*request, &ioc->chip->RequestDescriptorPostLow,
 	    &ioc->scsi_lookup_lock);
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_put_smid_default);
+#endif
+
+/**
+ * mpt3sas_base_put_smid_target - Target Assist and Target Status
+ * @ioc: per adapter object
+ * @smid: system request message index
+ * @io_index: value used to track the IO
+ *
+ * Return nothing.
+ */
+void
+mpt3sas_base_put_smid_target(struct MPT3SAS_ADAPTER *ioc, u16 smid, u16 io_index)
+{
+        Mpi2RequestDescriptorUnion_t descriptor;
+        u64 *request = (u64 *)&descriptor;
+
+	descriptor.SCSITarget.RequestFlags =
+	    MPI2_REQ_DESCRIPT_FLAGS_SCSI_TARGET;
+	descriptor.SCSITarget.MSIxIndex =  _base_get_msix_index(ioc);
+	descriptor.SCSITarget.SMID = cpu_to_le16(smid);
+	descriptor.SCSITarget.LMID = 0;
+	descriptor.SCSITarget.IoIndex = cpu_to_le16(io_index);
+        _base_writeq(*request, &ioc->chip->RequestDescriptorPostLow,
+            &ioc->scsi_lookup_lock);
+}
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_put_smid_target);
+#endif
 
 /**
  * _base_display_intel_branding - Display branding string
@@ -2668,12 +2794,19 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc,  int sleep_flag)
 	u16 max_request_credit;
 	unsigned short sg_tablesize;
 	u16 sge_size;
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    int num_cmd_buffers;
+#endif
 	int i;
 
 	dinitprintk(ioc, pr_info(MPT3SAS_FMT "%s\n", ioc->name,
 	    __func__));
 
-
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    num_cmd_buffers = min_t(int, NUM_CMD_BUFFERS,
+        ioc->pfacts[0].MaxPostedCmdBuffers);
+#endif
+    
 	retry_sz = 0;
 	facts = &ioc->facts;
 
@@ -2696,7 +2829,13 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc,  int sleep_flag)
 	ioc->shost->sg_tablesize = sg_tablesize;
 
 	ioc->hi_priority_depth = facts->HighPriorityCredit;
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    /* allocating 5 extra mf's */
+    ioc->internal_depth = max_t(int, ioc->hi_priority_depth,
+                                num_cmd_buffers) + (5);
+#else
 	ioc->internal_depth = ioc->hi_priority_depth + (5);
+#endif
 	/* command line tunables  for max controller queue depth */
 	if (max_queue_depth != -1 && max_queue_depth != 0) {
 		max_request_credit = min_t(u16, max_queue_depth +
@@ -2837,7 +2976,12 @@ _base_allocate_memory_pools(struct MPT3SAS_ADAPTER *ioc,  int sleep_flag)
 	/* set the scsi host can_queue depth
 	 * with some internal commands that could be outstanding
 	 */
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    /* allocating 2 extra mf's */
+    ioc->shost->can_queue = ioc->scsiio_depth - num_cmd_buffers;
+#else
 	ioc->shost->can_queue = ioc->scsiio_depth;
+#endif
 	dinitprintk(ioc, pr_info(MPT3SAS_FMT
 		"scsi host: can_queue depth (%d)\n",
 		ioc->name, ioc->shost->can_queue));
@@ -3091,6 +3235,9 @@ mpt3sas_base_get_iocstate(struct MPT3SAS_ADAPTER *ioc, int cooked)
 	sc = s & MPI2_IOC_STATE_MASK;
 	return cooked ? sc : s;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_get_iocstate);
+#endif
 
 /**
  * _base_wait_on_iocstate - waiting on a particular ioc state
@@ -3536,6 +3683,9 @@ mpt3sas_base_sas_iounit_control(struct MPT3SAS_ADAPTER *ioc,
 	mutex_unlock(&ioc->base_cmds.mutex);
 	return rc;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_sas_iounit_control);
+#endif
 
 /**
  * mpt3sas_base_scsi_enclosure_processor - sending request to sep device
@@ -3733,6 +3883,8 @@ _base_get_ioc_facts(struct MPT3SAS_ADAPTER *ioc, int sleep_flag)
 	facts->FWVersion.Word = le32_to_cpu(mpi_reply.FWVersion.Word);
 	facts->IOCRequestFrameSize =
 	    le16_to_cpu(mpi_reply.IOCRequestFrameSize);
+    facts->IOCMaxChainSegmentSize =
+        le16_to_cpu(mpi_reply.IOCMaxChainSegmentSize);
 	facts->MaxInitiators = le16_to_cpu(mpi_reply.MaxInitiators);
 	facts->MaxTargets = le16_to_cpu(mpi_reply.MaxTargets);
 	ioc->shost->max_id = -1;
@@ -4753,6 +4905,11 @@ mpt3sas_base_attach(struct MPT3SAS_ADAPTER *ioc)
 	_base_unmask_events(ioc, MPI2_EVENT_IR_OPERATION_STATUS);
 	_base_unmask_events(ioc, MPI2_EVENT_LOG_ENTRY_ADDED);
 	_base_unmask_events(ioc, MPI2_EVENT_TEMP_THRESHOLD);
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    _base_unmask_events(ioc, MPI2_EVENT_SAS_INIT_DEVICE_STATUS_CHANGE);
+    _base_unmask_events(ioc, MPI2_EVENT_SAS_INIT_TABLE_OVERFLOW);
+    _base_unmask_events(ioc, MPI2_EVENT_HARD_RESET_RECEIVED);
+#endif
 
 	r = _base_make_ioc_operational(ioc, CAN_SLEEP);
 	if (r)
@@ -4801,7 +4958,7 @@ mpt3sas_base_detach(struct MPT3SAS_ADAPTER *ioc)
 {
 	dexitprintk(ioc, pr_info(MPT3SAS_FMT "%s\n", ioc->name,
 	    __func__));
-
+    
 	mpt3sas_base_stop_watchdog(ioc);
 	mpt3sas_base_free_resources(ioc);
 	_base_release_memory_pools(ioc);
@@ -4837,6 +4994,10 @@ _base_reset_handler(struct MPT3SAS_ADAPTER *ioc, int reset_phase)
 {
 	mpt3sas_scsih_reset_handler(ioc, reset_phase);
 	mpt3sas_ctl_reset_handler(ioc, reset_phase);
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+    if (stm_callbacks.reset_handler)
+        stm_callbacks.reset_handler(ioc, reset_phase);
+#endif
 	switch (reset_phase) {
 	case MPT3_IOC_PRE_RESET:
 		dtmprintk(ioc, pr_info(MPT3SAS_FMT
@@ -5031,3 +5192,6 @@ mpt3sas_base_hard_reset_handler(struct MPT3SAS_ADAPTER *ioc, int sleep_flag,
 	    __func__));
 	return r;
 }
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+EXPORT_SYMBOL(mpt3sas_base_hard_reset_handler);
+#endif

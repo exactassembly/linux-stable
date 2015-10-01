@@ -54,6 +54,7 @@
 #include "mpi/mpi2_raid.h"
 #include "mpi/mpi2_tool.h"
 #include "mpi/mpi2_sas.h"
+#include "mpi/mpi2_targ.h"
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -88,6 +89,9 @@
 #define MPT3SAS_SG_DEPTH		MPT3SAS_MAX_PHYS_SEGMENTS
 #endif
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+#define NUM_CMD_BUFFERS    128
+#endif
 
 /*
  * Generic Defines
@@ -548,7 +552,7 @@ struct mpt3sas_facts {
 	u32			IOCCapabilities;
 	union mpi3_version_union	FWVersion;
 	u16			IOCRequestFrameSize;
-	u16			Reserved3;
+    u16			IOCMaxChainSegmentSize;
 	u16			MaxInitiators;
 	u16			MaxTargets;
 	u16			MaxSasExpanders;
@@ -957,11 +961,33 @@ struct MPT3SAS_ADAPTER {
 	struct SL_WH_EVENT_TRIGGERS_T diag_trigger_event;
 	struct SL_WH_SCSI_TRIGGERS_T diag_trigger_scsi;
 	struct SL_WH_MPI_TRIGGERS_T diag_trigger_mpi;
+    
+    void    *stmpriv;
 };
 
 typedef u8 (*MPT_CALLBACK)(struct MPT3SAS_ADAPTER *ioc, u16 smid, u8 msix_index,
 	u32 reply);
 
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+typedef void (*STM_CALLBACK_WITH_IOC)(struct MPT3SAS_ADAPTER *ioc);
+typedef void (*STM_CALLBACK_FOR_TGT_CMD)(struct MPT3SAS_ADAPTER *ioc,
+                                Mpi2TargetCommandBufferReplyDescriptor_t *rpf,
+                                u8 msix_index);
+typedef u8 (*STM_CALLBACK_FOR_TGT_ASSIST)(struct MPT3SAS_ADAPTER *ioc,
+                                Mpi2TargetAssistSuccessReplyDescriptor_t *rpf);
+typedef u8 (*STM_CALLBACK_FOR_SMID)(struct MPT3SAS_ADAPTER *ioc,
+                                u8 msix_index, u32 reply);
+typedef void (*STM_CALLBACK_FOR_RESET)(struct MPT3SAS_ADAPTER *ioc,
+                                int reset_phase);
+
+struct STM_CALLBACK {
+    STM_CALLBACK_WITH_IOC  watchdog;
+    STM_CALLBACK_FOR_TGT_CMD target_command;
+    STM_CALLBACK_FOR_TGT_ASSIST target_assist;
+    STM_CALLBACK_FOR_SMID event_handler;
+    STM_CALLBACK_FOR_RESET reset_handler;
+};
+#endif
 
 /* base shared API */
 extern struct list_head mpt3sas_ioc_list;
@@ -994,6 +1020,7 @@ void mpt3sas_base_put_smid_fast_path(struct MPT3SAS_ADAPTER *ioc, u16 smid,
 	u16 handle);
 void mpt3sas_base_put_smid_hi_priority(struct MPT3SAS_ADAPTER *ioc, u16 smid);
 void mpt3sas_base_put_smid_default(struct MPT3SAS_ADAPTER *ioc, u16 smid);
+void mpt3sas_base_put_smid_target(struct MPT3SAS_ADAPTER *ioc, u16 smid, u16 io_index);
 void mpt3sas_base_initialize_callback_handler(void);
 u8 mpt3sas_base_register_callback_handler(MPT_CALLBACK cb_func);
 void mpt3sas_base_release_callback_handler(u8 cb_idx);
@@ -1126,6 +1153,8 @@ int mpt3sas_config_get_volume_handle(struct MPT3SAS_ADAPTER *ioc, u16 pd_handle,
 	u16 *volume_handle);
 int mpt3sas_config_get_volume_wwid(struct MPT3SAS_ADAPTER *ioc,
 	u16 volume_handle, u64 *wwid);
+int mpt3sas_config_get_port_facts(struct MPT3SAS_ADAPTER *ioc, struct mpt3sas_port_facts *pfacts_copy);
+int mpt3sas_config_get_ioc_facts(struct MPT3SAS_ADAPTER *ioc, struct mpt3sas_facts *ifacts_copy);
 
 /* ctl shared API */
 extern struct device_attribute *mpt3sas_host_attrs[];
@@ -1177,4 +1206,12 @@ void mpt3sas_trigger_scsi(struct MPT3SAS_ADAPTER *ioc, u8 sense_key,
 	u8 asc, u8 ascq);
 void mpt3sas_trigger_mpi(struct MPT3SAS_ADAPTER *ioc, u16 ioc_status,
 	u32 loginfo);
+
+/* SCSI target mode module */
+#if defined(CONFIG_SCSI_MPT3SAS_STM)
+void mpt3sas_base_stm_initialize_callback_handler(void);
+void mpt3sas_base_stm_register_callback_handler(struct STM_CALLBACK stm_funcs);
+void mpt3sas_base_stm_release_callback_handler(void);
+#endif
+
 #endif /* MPT3SAS_BASE_H_INCLUDED */
